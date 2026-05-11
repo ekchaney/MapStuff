@@ -438,7 +438,7 @@
     <div><span class="dot" style="background:#520029"></span>Very Unhealthy (201-300)</div>
     <div><span class="dot" style="background:#290000"></span>Hazardous (301+)</div>
     <div><span class="dot" style="background:#607090"></span>No Data</div>
-    <div class="section">
+    <div id="legend-population-section" class="section">
       <h2>Population Heat</h2>
       <div><span class="swatch" style="background:#66F7FF"></span>Lowest population</div>
       <div><span class="swatch" style="background:#1EB7FF"></span>Medium population</div>
@@ -1499,11 +1499,22 @@
     }
 
     function setPopulationVisibilityForYear(year) {
-      const showPopulation =
-        hasPopulationYear(year) && document.getElementById('toggle-population').checked;
+      const popOn = document.getElementById('toggle-population').checked;
+      const showPopulation = hasPopulationYear(year) && popOn;
       setLayerVisibility('population-heat', showPopulation);
       setLayerVisibility('population-point', showPopulation);
       setLayerVisibility('population-label', showPopulation);
+
+      const legendPop = document.getElementById('legend-population-section');
+      const yearNote = document.getElementById('year-note');
+      if (legendPop) legendPop.style.display = popOn ? '' : 'none';
+      if (yearNote) {
+        if (!popOn) yearNote.style.display = 'none';
+        else {
+          yearNote.style.display = '';
+          updatePopulationYearNote(year);
+        }
+      }
     }
 
 
@@ -1745,10 +1756,6 @@
         setCompareLayerVisibility();
       });
 
-      windToggle.addEventListener('change', () => {
-        if (compareWindToggle) compareWindToggle.checked = windToggle.checked;
-      });
-
       // Main AQI overlay is independent from compare map overlay.
 
       compareAirToggle.addEventListener('change', () => {
@@ -1789,6 +1796,7 @@
       });
 
       windToggle.addEventListener('change', () => {
+        if (compareWindToggle) compareWindToggle.checked = windToggle.checked;
         document.getElementById('wind-canvas').style.display = windToggle.checked ? 'block' : 'none';
       });
 
@@ -1869,7 +1877,77 @@
       windCanvas.style.opacity = String(0.42 + ((year % 5) * 0.055));
     }
 
-    function windVector(x, y, time) {
+    /** Map under this screen point (main or compare), or null. */
+    function mapForWindAt(clientX, clientY) {
+      const mainEl = map.getContainer();
+      const mr = mainEl.getBoundingClientRect();
+      if (clientX >= mr.left && clientX <= mr.right && clientY >= mr.top && clientY <= mr.bottom) {
+        return map;
+      }
+      if (compareMap && compareReady && document.body.classList.contains('split-view')) {
+        const cr = compareMap.getContainer().getBoundingClientRect();
+        if (clientX >= cr.left && clientX <= cr.right && clientY >= cr.top && clientY <= cr.bottom) {
+          return compareMap;
+        }
+      }
+      return null;
+    }
+
+    function clientPointToLngLat(targetMap, clientX, clientY) {
+      const r = targetMap.getContainer().getBoundingClientRect();
+      return targetMap.unproject([clientX - r.left, clientY - r.top]);
+    }
+
+    function pickWindPackForYear(W, year) {
+      if (!W) return null;
+      const sk = String(year);
+      const pack = W[sk];
+      return pack && pack.u && pack.v ? pack : null;
+    }
+
+    function sampleWindUVAt(pack, meta, lng, lat) {
+      const { cols, rows, latMin, latMax, lonMin, lonMax } = meta;
+      if (lng < lonMin || lng > lonMax || lat < latMin || lat > latMax) return null;
+      const fr = ((lat - latMin) / (latMax - latMin)) * (rows - 1);
+      const fc = ((lng - lonMin) / (lonMax - lonMin)) * (cols - 1);
+      const r0 = Math.max(0, Math.min(rows - 2, Math.floor(fr)));
+      const c0 = Math.max(0, Math.min(cols - 2, Math.floor(fc)));
+      const tr = fr - r0;
+      const tc = fc - c0;
+      const r1 = r0 + 1;
+      const c1 = c0 + 1;
+      const uA = pack.u;
+      const vA = pack.v;
+      const mix = (q00, q01, q10, q11) =>
+        q00 * (1 - tr) * (1 - tc) +
+        q01 * (1 - tr) * tc +
+        q10 * tr * (1 - tc) +
+        q11 * tr * tc;
+      const ui = (rr, cc) => uA[rr * cols + cc];
+      const vi = (rr, cc) => vA[rr * cols + cc];
+      return {
+        u: mix(ui(r0, c0), ui(r0, c1), ui(r1, c0), ui(r1, c1)),
+        v: mix(vi(r0, c0), vi(r0, c1), vi(r1, c0), vi(r1, c1))
+      };
+    }
+
+    /** East/north wind components (normalized) → screen pixel delta per animation unit. */
+    function windGeoToScreenDelta(targetMap, lng, lat, uEast, vNorth) {
+      const step = 0.035;
+      const p0 = targetMap.project([lng, lat]);
+      const pe = targetMap.project([lng + step, lat]);
+      const pn = targetMap.project([lng, lat + step]);
+      const dex = (pe.x - p0.x) / step;
+      const dey = (pe.y - p0.y) / step;
+      const dnx = (pn.x - p0.x) / step;
+      const dny = (pn.y - p0.y) / step;
+      return {
+        x: uEast * dex + vNorth * dnx,
+        y: uEast * dey + vNorth * dny
+      };
+    }
+
+    function windVectorSynthetic(x, y, time) {
       const yearPhase = (windYear - 2000) * 0.19;
       const nx = x / Math.max(window.innerWidth, 1);
       const ny = y / Math.max(window.innerHeight, 1);
@@ -1882,6 +1960,32 @@
         x: Math.cos(angle) * magnitude,
         y: Math.sin(angle) * magnitude
       };
+    }
+
+    /** Uses `data/wind.js` (NOAA ISD-derived grid) when loaded; otherwise synthetic flow. */
+    function windVector(x, y, time) {
+      const W = typeof WIND_DATA !== 'undefined' ? WIND_DATA : null;
+      if (W && W.meta) {
+        const tgt = mapForWindAt(x, y);
+        if (tgt) {
+          const ll = clientPointToLngLat(tgt, x, y);
+          const pack = pickWindPackForYear(W, windYear);
+          if (pack) {
+            const uv = sampleWindUVAt(pack, W.meta, ll.lng, ll.lat);
+            if (uv) {
+              const d = windGeoToScreenDelta(tgt, ll.lng, ll.lat, uv.u, uv.v);
+              const cur = Math.hypot(d.x, d.y);
+              if (cur > 1e-5) {
+                const base = Math.hypot(uv.u, uv.v);
+                const targetMag = Math.min(base * 0.52 + 0.34, 1.22);
+                const s = targetMag / cur;
+                return { x: d.x * s, y: d.y * s };
+              }
+            }
+          }
+        }
+      }
+      return windVectorSynthetic(x, y, time);
     }
 
     function drawWind(time) {
@@ -1916,6 +2020,22 @@
       }
 
       windFrame = requestAnimationFrame(drawWind);
+    }
+
+    function loadWindScript() {
+      return new Promise(resolve => {
+        try {
+          if (typeof WIND_DATA !== 'undefined' && WIND_DATA && WIND_DATA.meta) {
+            resolve(true);
+            return;
+          }
+        } catch (e) { /* ignore */ }
+        const s = document.createElement('script');
+        s.src = './data/wind.js';
+        s.onload = () => resolve(typeof WIND_DATA !== 'undefined' && !!WIND_DATA && !!WIND_DATA.meta);
+        s.onerror = () => resolve(false);
+        document.head.appendChild(s);
+      });
     }
 
     function initWindAnimation() {
@@ -2047,7 +2167,6 @@
         map.getSource('population-cities').setData(populationToGeoJSON(year));
       }
       setPopulationVisibilityForYear(year);
-      updatePopulationYearNote(year);
       updateWindForYear(year);
       updateStateChoropleth(year);
       scheduleWeatherRedrawMain();
@@ -2066,7 +2185,6 @@
       document.getElementById('year-display').textContent = YEARS[currentYearIdx];
       document.getElementById('compare-display').textContent = YEARS[compareYearIdx];
       setPopulationVisibilityForYear(YEARS[currentYearIdx]);
-      updatePopulationYearNote(YEARS[currentYearIdx]);
 
       range.addEventListener('input', () => setYear(+range.value));
       prev.addEventListener('click',  () => setYear(currentYearIdx - 1));
@@ -2086,6 +2204,7 @@
 
       initSlider();
       initLayerControls();
+      await loadWindScript();
       initWindAnimation();
 
       // County lines load lazily when user zooms in
