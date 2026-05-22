@@ -1,0 +1,60 @@
+Third-Party Libraries
+
+This project uses the following open-source software libraries:
+
+1. MapLibre GL JS
+   Website: https://maplibre.org/
+   License: BSD-3-Clause License
+
+2. Three.js
+   Website: https://threejs.org/
+   License: MIT License
+
+These libraries remain the property of their respective authors and are
+distributed under their own licenses.
+
+-----------------------------------------------
+
+Data Sources and Attribution
+
+This project incorporates publicly available environmental and demographic
+datasets from United States government agencies.
+
+1. U.S. Environmental Protection Agency (EPA)
+   Dataset: EPA AirData
+   Website:
+   https://www.epa.gov/outdoor-air-quality-data
+
+   Air quality monitoring station measurements and AQI-related pollutant
+   summaries were derived from EPA AirData annual monitoring datasets.
+
+2. United States Census Bureau
+   Dataset: Population Estimates Program
+   Website:
+   https://www.census.gov/data/tables/time-series/demo/popest/
+   2020s-total-cities-and-towns.html
+
+   Population and demographic information were derived from Census Bureau
+   place-level population estimate datasets and Gazetteer geographic files.
+
+3. NOAA National Centers for Environmental Information (NCEI)
+   Dataset: Integrated Surface Database (ISD Lite)
+   Website:
+   https://www.ncei.noaa.gov/products/land-based-station/
+   integrated-surface-database
+
+   Wind vector and atmospheric movement visualizations were derived from
+   NOAA ISD Lite historical weather station observations.
+
+4. Esri
+   Dataset/Service: ArcGIS World Imagery
+   Website:
+   https://www.esri.com/
+
+   Satellite imagery tiles used for map rendering are provided by Esri.
+
+-------------------------------------------
+
+Disclaimer: This project is an independent academic and research visualization and is
+not affiliated with, endorsed by, or sponsored by the EPA, NOAA, the U.S.
+Census Bureau, Esri, or any associated government agency.
