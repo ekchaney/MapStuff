@@ -1,0 +1,2226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>US Population + Air Quality Map</title>
+
+  <!-- ======================================================
+       DEPENDENCIES
+  ====================================================== -->
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <!-- Embedded as JS var to avoid file:// CORS block -->
+  <script src="../data/processed/sites.js"></script>
+  <script src="../data/processed/historical.js"></script>
+  <script src="../data/processed/population.js"></script>
+  <script src="../data/processed/wind.js"></script>
+  <!--<img src="./assets/glyphs/ag.png"> -->
+
+  <!-- ======================================================
+       STYLES
+  ====================================================== -->
+  <style>
+    /* ----- Base ----- */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #1a1a1a; }
+    #map-shell {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      background: #05070d;
+    }
+    #map, #map-compare {
+      height: 100vh;
+      min-width: 0;
+      flex: 1 1 100%;
+    }
+    #map-compare { display: none; border-left: 1px solid rgba(140, 140, 140, 0.45); }
+    body.split-view #map, body.split-view #map-compare { flex-basis: 50%; }
+    body.split-view #map-compare { display: block; }
+    #wind-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 4;
+      mix-blend-mode: screen;
+    }
+    #map, #map-compare { position: relative; }
+    .aqi-overlay-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 3;
+      opacity: 0.72;
+      display: none;
+    }
+
+    /* ----- Tooltip ----- */
+    #tooltip {
+      position: absolute;
+      background: rgba(10, 10, 30, 0.92);
+      color: #e0e0e0;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      pointer-events: none;
+      display: none;
+      border: 1px solid rgba(140, 140, 140, 0.4);
+      backdrop-filter: blur(4px);
+      z-index: 10;
+      max-width: 200px;
+      line-height: 1.5;
+    }
+
+    /* ----- Map Popups ----- */
+    .maplibregl-popup-content {
+      background: rgba(8, 10, 18, 0.94);
+      color: #d8d8d8;
+      border: 1px solid rgba(140, 140, 140, 0.38);
+      border-radius: 8px;
+      box-shadow: 0 16px 38px rgba(0, 0, 0, 0.42);
+      padding: 12px 14px;
+      font: 12px/1.45 system-ui, sans-serif;
+      max-width: 280px;
+    }
+    .maplibregl-popup-tip {
+      border-top-color: rgba(8, 10, 18, 0.94);
+      border-bottom-color: rgba(8, 10, 18, 0.94);
+    }
+    .maplibregl-popup-close-button {
+      color: #d8defe;
+      font-size: 16px;
+      padding: 3px 7px;
+    }
+    .maplibregl-popup-close-button:hover {
+      background: rgba(140, 140, 140, 0.18);
+      color: #fff;
+    }
+
+    /* ----- Info and Layer Controls ----- */
+    #info-panel {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      width: min(360px, calc(100vw - 32px));
+      z-index: 10;
+      background: rgba(8, 10, 18, 0.88);
+      color: #f4f4f4;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 8px;
+      padding: 14px 16px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 16px 38px rgba(0, 0, 0, 0.38);
+    }
+    #info-panel h1 {
+      font-size: 17px;
+      line-height: 1.2;
+      font-weight: 750;
+      margin-bottom: 8px;
+    }
+    #info-panel p {
+      color: #b8b8b8;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    #source-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+      font-size: 11px;
+    }
+    #source-links a {
+      color: #d8d8d8;
+      text-decoration: none;
+      border-bottom: 1px solid rgba(216, 216, 216, 0.35);
+    }
+    #layer-controls {
+      position: absolute;
+      top: 188px;
+      left: 16px;
+      z-index: 10;
+      display: grid;
+      gap: 7px;
+      background: rgba(8, 10, 18, 0.86);
+      color: #d8d8d8;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      padding: 10px 12px;
+      backdrop-filter: blur(8px);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    #layer-controls label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    #compare-slider {
+      position: absolute;
+      bottom: 88px;
+      right: 24px;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      background: rgba(10, 10, 35, 0.92);
+      padding: 10px 16px;
+      border-radius: 28px;
+      border: 1px solid rgba(140, 140, 140, 0.45);
+      backdrop-filter: blur(8px);
+      z-index: 10;
+      color: #c0c0c0;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    body.split-view #compare-slider { display: flex; }
+    body.split-view #compare-slider {
+      top: 16px;
+      right: 64px;
+      bottom: auto;
+      width: min(420px, calc(50vw - 96px));
+      max-width: calc(50vw - 96px);
+    }
+    #compare-range { width: 100%; min-width: 0; }
+    #split-controls {
+      position: absolute;
+      top: 66px;
+      right: 64px;
+      z-index: 10;
+      display: none;
+      gap: 7px;
+      background: rgba(8, 10, 18, 0.86);
+      color: #d8d8d8;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      padding: 10px 12px;
+      backdrop-filter: blur(8px);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    #split-controls label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    body.split-view #split-controls { display: grid; }
+    #compare-range {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 220px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(140, 140, 140, 0.3);
+      outline: none;
+      cursor: pointer;
+    }
+    #compare-range::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #c0c0c0;
+      border: 2px solid #fff;
+      cursor: pointer;
+    }
+
+    /* ----- County Loading Indicator ----- */
+    #loading {
+      position: absolute;
+      bottom: 110px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(10, 10, 30, 0.9);
+      color: #aaaaaa;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      border: 1px solid rgba(140, 140, 140, 0.4);
+      display: none;
+      z-index: 10;
+    }
+
+    /* ----- Year Slider ----- */
+    #year-slider {
+      position: absolute;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(10, 10, 35, 0.92);
+      padding: 10px 22px;
+      border-radius: 32px;
+      border: 1px solid rgba(140, 140, 140, 0.45);
+      backdrop-filter: blur(8px);
+      z-index: 10;
+      white-space: nowrap;
+    }
+    #year-display {
+      font-size: 20px;
+      font-weight: 700;
+      color: #c0c0c0;
+      min-width: 52px;
+      text-align: center;
+      letter-spacing: 0.04em;
+    }
+    #year-range {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 280px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(140, 140, 140, 0.3);
+      outline: none;
+      cursor: pointer;
+    }
+    #year-range::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #aaaaaa;
+      border: 2px solid #fff;
+      box-shadow: 0 0 6px rgba(140, 140, 140, 0.8);
+      cursor: pointer;
+    }
+    #year-range::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #aaaaaa;
+      border: 2px solid #fff;
+      box-shadow: 0 0 6px rgba(140, 140, 140, 0.8);
+      cursor: pointer;
+    }
+    .year-btn {
+      background: none;
+      border: none;
+      color: #aaaaaa;
+      font-size: 22px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 4px;
+      transition: color 0.15s;
+    }
+    .year-btn:hover { color: #fff; }
+    #year-label {
+      font-size: 11px;
+      color: #777777;
+      text-align: center;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* ----- Legends ----- */
+    #legend {
+      position: absolute;
+      bottom: 40px;
+      right: 16px;
+      width: 250px;
+      background: rgba(8, 10, 18, 0.88);
+      color: #d8d8d8;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      border: 1px solid rgba(140, 140, 140, 0.3);
+      backdrop-filter: blur(6px);
+      z-index: 10;
+      line-height: 1.8;
+    }
+    #legend h2 {
+      font-size: 12px;
+      margin: 0 0 6px;
+      color: #fff;
+    }
+    #legend .dot, #legend .swatch {
+      display: inline-block;
+      width: 10px; height: 10px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    #legend .dot { border-radius: 50%; }
+    #legend .swatch { border-radius: 2px; }
+    #legend .section {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    #year-note {
+      color: #989898;
+      font-size: 11px;
+      line-height: 1.35;
+      margin-top: 8px;
+    }
+
+    @media (max-width: 720px) {
+      #info-panel { top: 10px; left: 10px; width: calc(100vw - 20px); }
+      #layer-controls { top: 178px; left: 10px; }
+      #legend { right: 10px; bottom: 98px; width: min(250px, calc(100vw - 20px)); }
+      #year-slider { width: calc(100vw - 20px); padding: 10px 12px; }
+      #compare-slider { right: 10px; bottom: 154px; width: calc(100vw - 20px); }
+      #compare-range { width: 100%; }
+      #year-range { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ======================================================
+       HTML STRUCTURE
+  ====================================================== -->
+  <div id="map-shell">
+    <div id="map">
+      <canvas class="aqi-overlay-canvas" id="weather-canvas-main"></canvas>
+    </div>
+    <div id="map-compare">
+      <canvas class="aqi-overlay-canvas" id="weather-canvas-compare"></canvas>
+    </div>
+  </div>
+  <canvas id="wind-canvas"></canvas>
+  <div id="tooltip"></div>
+  <section id="info-panel">
+    <h1>United States Population + Air Quality</h1>
+    <p>Census city population estimates are shown as a heatmap. EPA AirData monitor summaries use the AQI color ramp from your legend image. The moving air layer animates every selected year.</p>
+    <div id="source-links">
+      <a href="https://www.census.gov/data/tables/time-series/demo/popest/2020s-total-cities-and-towns.html" target="_blank" rel="noreferrer">Census population</a>
+      <a href="https://www.epa.gov/outdoor-air-quality-data" target="_blank" rel="noreferrer">EPA AirData</a>
+      <a href="https://www.epa.gov/outdoor-air-quality-data/airdata-multiyear-tile-plot" target="_blank" rel="noreferrer">EPA tile plot</a>
+    </div>
+  </section>
+  <div id="layer-controls">
+    <label><input type="checkbox" id="toggle-air" checked /> AQI Stations</label>
+    <label><input type="checkbox" id="toggle-population" checked /> Population</label>
+    <label><input type="checkbox" id="toggle-wind" checked /> Air / wind</label>
+    <label><input type="checkbox" id="toggle-weather-overlay" /> AQI Overlay</label>
+    <label><input type="checkbox" id="toggle-aqi-choropleth" /> State AQI</label>
+    <label><input type="checkbox" id="toggle-density-choropleth" /> State Density</label>
+    <label><input type="checkbox" id="toggle-split" /> Split view</label>
+  </div>
+  <div id="loading">Loading county data...</div>
+
+  <div id="year-slider">
+    <div id="year-label">Year</div>
+    <button class="year-btn" id="year-prev">&#8249;</button>
+    <input type="range" id="year-range" min="0" step="1" value="0" />
+    <button class="year-btn" id="year-next">&#8250;</button>
+    <div id="year-display">—</div>
+  </div>
+  <div id="compare-slider">
+    <span>Compare</span>
+    <input type="range" id="compare-range" min="0" step="1" value="0" />
+    <strong id="compare-display">—</strong>
+  </div>
+  <div id="split-controls">
+    <label><input type="checkbox" id="toggle-compare-air" checked /> AQI Stations</label>
+    <label><input type="checkbox" id="toggle-compare-population" checked /> Population</label>
+    <label><input type="checkbox" id="toggle-compare-wind" checked /> Air / wind (shared)</label>
+    <label><input type="checkbox" id="toggle-compare-weather-overlay" /> AQI Overlay</label>
+    <label><input type="checkbox" id="toggle-compare-aqi-choropleth" /> State AQI</label>
+    <label><input type="checkbox" id="toggle-compare-density-choropleth" /> State Density</label>
+  </div>
+  <div id="legend">
+    <h2>Air Quality Index</h2>
+    <div><span class="dot" style="background:#78FF78"></span>Good (0-50)</div>
+    <div><span class="dot" style="background:#E3B500"></span>Moderate (51-100)</div>
+    <div><span class="dot" style="background:#E07000"></span>Unhealthy for Some (101-150)</div>
+    <div><span class="dot" style="background:#980000"></span>Unhealthy (151-200)</div>
+    <div><span class="dot" style="background:#520029"></span>Very Unhealthy (201-300)</div>
+    <div><span class="dot" style="background:#290000"></span>Hazardous (301+)</div>
+    <div><span class="dot" style="background:#607090"></span>No Data</div>
+    <div id="legend-population-section" class="section">
+      <h2>Population Heat</h2>
+      <div><span class="swatch" style="background:#66F7FF"></span>Lowest population</div>
+      <div><span class="swatch" style="background:#1EB7FF"></span>Medium population</div>
+      <div><span class="swatch" style="background:#1266CC"></span>High population</div>
+      <div><span class="swatch" style="background:#061B5B"></span>Highest population</div>
+    </div>
+    <div id="legend-density" class="section" style="display:none">
+      <h2>State Density (per mi²)</h2>
+      <div><span class="swatch" style="background:#e0e0d8"></span>&lt; 10 (sparse)</div>
+      <div><span class="swatch" style="background:#c8c8c0"></span>10 – 50</div>
+      <div><span class="swatch" style="background:#a0a098"></span>50 – 150</div>
+      <div><span class="swatch" style="background:#787870"></span>150 – 400</div>
+      <div><span class="swatch" style="background:#484840"></span>400+ (dense)</div>
+    </div>
+    <div id="year-note">Population year: Census exact year when available. EPA monitor data uses the local AirData years.</div>
+  </div>
+
+  <script>
+    // ======================================================
+    // CONSTANTS & HELPERS
+    // ======================================================
+
+    const STATE_LAND_AREA = {
+      'Alabama':50645,'Alaska':571951,'Arizona':113594,'Arkansas':52035,
+      'California':155779,'Colorado':103642,'Connecticut':4842,'Delaware':1949,
+      'Florida':53625,'Georgia':57513,'Hawaii':6423,'Idaho':82643,
+      'Illinois':55519,'Indiana':35826,'Iowa':55857,'Kansas':81759,
+      'Kentucky':39486,'Louisiana':43204,'Maine':30843,'Maryland':9707,
+      'Massachusetts':7800,'Michigan':56804,'Minnesota':79627,'Mississippi':46923,
+      'Missouri':68742,'Montana':145546,'Nebraska':76824,'Nevada':109781,
+      'New Hampshire':8953,'New Jersey':7354,'New Mexico':121298,'New York':47126,
+      'North Carolina':48618,'North Dakota':68976,'Ohio':40861,'Oklahoma':68595,
+      'Oregon':95988,'Pennsylvania':44743,'Rhode Island':1034,'South Carolina':30061,
+      'South Dakota':75811,'Tennessee':41235,'Texas':261232,'Utah':82170,
+      'Vermont':9217,'Virginia':39490,'Washington':66456,'West Virginia':24038,
+      'Wisconsin':54158,'Wyoming':97093,'District of Columbia':61
+    };
+
+    const FIPS_TO_STATE = {
+      '01':'Alabama','02':'Alaska','04':'Arizona','05':'Arkansas',
+      '06':'California','08':'Colorado','09':'Connecticut','10':'Delaware',
+      '11':'District of Columbia','12':'Florida','13':'Georgia',
+      '15':'Hawaii','16':'Idaho','17':'Illinois','18':'Indiana',
+      '19':'Iowa','20':'Kansas','21':'Kentucky','22':'Louisiana',
+      '23':'Maine','24':'Maryland','25':'Massachusetts','26':'Michigan',
+      '27':'Minnesota','28':'Mississippi','29':'Missouri','30':'Montana',
+      '31':'Nebraska','32':'Nevada','33':'New Hampshire','34':'New Jersey',
+      '35':'New Mexico','36':'New York','37':'North Carolina','38':'North Dakota',
+      '39':'Ohio','40':'Oklahoma','41':'Oregon','42':'Pennsylvania',
+      '44':'Rhode Island','45':'South Carolina','46':'South Dakota',
+      '47':'Tennessee','48':'Texas','49':'Utah','50':'Vermont',
+      '51':'Virginia','53':'Washington','54':'West Virginia',
+      '55':'Wisconsin','56':'Wyoming'
+    };
+
+    const COUNTY_ZOOM = 5;
+
+    const YEARS = Object.keys(HISTORICAL_DATA).map(Number).sort((a, b) => a - b);
+    let currentYearIdx = YEARS.length - 1;
+
+    function aqiColor(aqi) {
+      if (aqi == null) return '#607090';
+      if (aqi <= 50)   return '#78FF78';
+      if (aqi <= 100)  return '#E3B500';
+      if (aqi <= 150)  return '#E07000';
+      if (aqi <= 200)  return '#980000';
+      if (aqi <= 300)  return '#520029';
+      return '#290000';
+    }
+
+    function hasPopulationYear(year) {
+      return POPULATION_YEARS.includes(year);
+    }
+
+    function updatePopulationYearNote(year) {
+      const note = document.getElementById('year-note');
+      if (!note) return;
+      if (hasPopulationYear(year)) {
+        note.textContent = `Population year: Census ${year}, matching the selected year. EPA monitor data uses the local AirData years.`;
+      } else {
+        note.textContent = `Population year: no official Census city/place population data loaded for ${year}. The population layer is hidden for this selected year.`;
+      }
+    }
+
+    function populationColor(population) {
+      if (population > 2900000) return '#061B5B';
+      if (population > 980000)  return '#1266CC';
+      if (population > 520029)  return '#1EB7FF';
+      if (population > 300000)  return '#44E0FF';
+      return '#66F7FF';
+    }
+
+    function populationToGeoJSON(year) {
+      const popYear = hasPopulationYear(year) ? year : null;
+      return {
+        type: 'FeatureCollection',
+        features: popYear == null ? [] : POPULATION_CITIES.map(city => {
+          const population = city.pop[popYear];
+          if (population == null) return null;
+          const previousYear = POPULATION_YEARS.includes(popYear - 1) ? popYear - 1 : null;
+          const previousPopulation = previousYear ? city.pop[previousYear] : null;
+          const change = previousPopulation == null ? null : population - previousPopulation;
+          const changePct = previousPopulation ? change / previousPopulation * 100 : null;
+          return {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [city.lon, city.lat] },
+            properties: {
+              name: city.name,
+              state: city.state,
+              population,
+              change,
+              changePct,
+              popYear,
+              color: populationColor(population)
+            }
+          };
+        }).filter(Boolean)
+      };
+    }
+
+    function yearToGeoJSON(year) {
+      const sites = HISTORICAL_DATA[year] || [];
+      return {
+        type: 'FeatureCollection',
+        features: sites.map(s => ({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+          properties: {
+            name:   s.name   || '',
+            state:  s.state  || '',
+            county: s.county || '',
+            aqi:    s.aqi    ?? null,
+            pm25:   s['PM2.5']  ?? null,
+            ozone:  s['Ozone']  ?? null,
+            no2:    s['NO2']    ?? null,
+            so2:    s['SO2']    ?? null,
+            co:     s['CO']     ?? null,
+            pm10:   s['PM10']   ?? null,
+            color:  aqiColor(s.aqi)
+          }
+        }))
+      };
+    }
+
+    function average(values) {
+      const nums = values.filter(v => v != null && Number.isFinite(+v)).map(Number);
+      if (!nums.length) return null;
+      return nums.reduce((sum, value) => sum + value, 0) / nums.length;
+    }
+
+    function normalizeName(value) {
+      return String(value || '').trim().toLowerCase();
+    }
+
+    function airSummaryFor({ stateName, countyName, year }) {
+      const sites = HISTORICAL_DATA[year] || [];
+      const stateNeedle = normalizeName(stateName);
+      const countyNeedle = normalizeName(countyName);
+      const filtered = sites.filter(site => {
+        const stateMatches = !stateNeedle || normalizeName(site.state) === stateNeedle;
+        const countyMatches = !countyNeedle || normalizeName(site.county) === countyNeedle;
+        return stateMatches && countyMatches;
+      });
+      const pollutants = ['PM2.5', 'Ozone', 'PM10', 'NO2', 'SO2', 'CO'];
+      return {
+        monitorCount: filtered.length,
+        avgAqi: average(filtered.map(site => site.aqi)),
+        maxAqi: filtered.reduce((max, site) => site.aqi != null ? Math.max(max, Number(site.aqi)) : max, 0) || null,
+        pollutantAverages: pollutants.map(name => ({
+          name,
+          value: average(filtered.map(site => site[name]))
+        })).filter(item => item.value != null)
+      };
+    }
+
+    function populationSummaryForState(stateName, year) {
+      if (!hasPopulationYear(year)) return null;
+      const stateNeedle = normalizeName(stateName);
+      const places = POPULATION_CITIES.filter(city => normalizeName(city.stateName) === stateNeedle && city.pop[year] != null);
+      const total = places.reduce((sum, city) => sum + Number(city.pop[year] || 0), 0);
+      const largest = places.slice().sort((a, b) => Number(b.pop[year] || 0) - Number(a.pop[year] || 0))[0] || null;
+      return {
+        placeCount: places.length,
+        total,
+        largest
+      };
+    }
+
+    function formatNumber(value, digits = 0) {
+      if (value == null || !Number.isFinite(+value)) return 'No data';
+      return Number(value).toLocaleString(undefined, {
+        maximumFractionDigits: digits,
+        minimumFractionDigits: digits
+      });
+    }
+
+    function hexToRgb(hex) {
+      return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+    }
+
+    function densityColor(density) {
+      if (density > 400) return '#484840';
+      if (density > 150) return '#787870';
+      if (density > 50)  return '#a0a098';
+      if (density > 10)  return '#c8c8c0';
+      return '#e0e0d8';
+    }
+
+    function pollutantUnit(name) {
+      if (name === 'PM2.5' || name === 'PM10') return 'ug/m3';
+      if (name === 'Ozone') return 'ppm';
+      if (name === 'CO') return 'ppm';
+      return 'ppb';
+    }
+
+    function buildStatePopupHTML(stateName, year) {
+      const air = airSummaryFor({ stateName, year });
+      const population = populationSummaryForState(stateName, year);
+      const pollutantRows = air.pollutantAverages.slice(0, 4).map(item =>
+        `<div>${item.name}: <strong>${formatNumber(item.value, item.name === 'Ozone' ? 4 : 2)}</strong> ${pollutantUnit(item.name)}</div>`
+      ).join('');
+      const populationHTML = population
+        ? `
+          <div style="margin-top:8px;color:#d8d8d8">Population (${year})</div>
+          <div>Census places: <strong>${formatNumber(population.placeCount)}</strong></div>
+          <div>Total place population: <strong>${formatNumber(population.total)}</strong></div>
+          ${population.largest ? `<div>Largest place: <strong>${population.largest.name}</strong> (${formatNumber(population.largest.pop[year])})</div>` : ''}
+        `
+        : `<div style="margin-top:8px;color:#d8d8d8">Population</div><div>No Census place population loaded for ${year}.</div>`;
+      return `
+        <strong style="color:#d8d8d8">${stateName}</strong><br/>
+        <span style="color:#aaa">Selected year: ${year}</span>
+        <div style="margin-top:8px;color:#d8d8d8">Air quality</div>
+        <div>Monitors: <strong>${formatNumber(air.monitorCount)}</strong></div>
+        <div>Average AQI: <strong>${formatNumber(air.avgAqi, 1)}</strong></div>
+        <div>Max AQI: <strong>${formatNumber(air.maxAqi)}</strong></div>
+        ${pollutantRows ? `<div style="margin-top:6px">${pollutantRows}</div>` : '<div>No pollutant averages for this year.</div>'}
+        ${populationHTML}
+      `;
+    }
+
+    function buildCountyPopupHTML(countyName, stateName, year) {
+      const air = airSummaryFor({ stateName, countyName, year });
+      const pollutantRows = air.pollutantAverages.slice(0, 4).map(item =>
+        `<div>${item.name}: <strong>${formatNumber(item.value, item.name === 'Ozone' ? 4 : 2)}</strong> ${pollutantUnit(item.name)}</div>`
+      ).join('');
+      return `
+        <strong style="color:#d8d8d8">${countyName} County</strong><br/>
+        <span style="color:#aaa">${stateName} - ${year}</span>
+        <div style="margin-top:8px;color:#d8d8d8">Air quality</div>
+        <div>Monitors: <strong>${formatNumber(air.monitorCount)}</strong></div>
+        <div>Average AQI: <strong>${formatNumber(air.avgAqi, 1)}</strong></div>
+        <div>Max AQI: <strong>${formatNumber(air.maxAqi)}</strong></div>
+        ${pollutantRows ? `<div style="margin-top:6px">${pollutantRows}</div>` : '<div>No pollutant averages for this county/year.</div>'}
+      `;
+    }
+
+    function computeStateAQIColor(stateName, year) {
+      const needle = normalizeName(stateName);
+      const aqis = (HISTORICAL_DATA[year] || [])
+        .filter(s => normalizeName(s.state) === needle && s.aqi != null)
+        .map(s => s.aqi);
+      const avg = average(aqis);
+      return avg != null ? aqiColor(avg) : null;
+    }
+
+    function computeStateDensityColor(stateName, year) {
+      if (!hasPopulationYear(year)) return null;
+      const needle = normalizeName(stateName);
+      const total = POPULATION_CITIES
+        .filter(c => normalizeName(c.stateName) === needle && c.pop[year] != null)
+        .reduce((sum, c) => sum + Number(c.pop[year]), 0);
+      return densityColor(total / (STATE_LAND_AREA[stateName] || 1));
+    }
+
+    function updateStateChoropleth(year) {
+      if (!statesGeoJSON || !map.getLayer('states-fill')) return;
+
+      if (choroplethMode === 'none') {
+        map.setPaintProperty('states-fill', 'fill-color',
+          ['case', ['boolean', ['feature-state', 'hover'], false], '#667788', '#303030']);
+        map.setPaintProperty('states-fill', 'fill-opacity',
+          ['case', ['boolean', ['feature-state', 'hover'], false], 0.7, 0.45]);
+        updateCountyChoropleth(year);
+        return;
+      }
+
+      // Build a match expression so every state gets its own literal color string.
+      // This avoids MapLibre's type-coercion issues with ['get', prop] in fill-color.
+      const matchArr = ['match', ['get', 'name']];
+      statesGeoJSON.features.forEach(f => {
+        const name = f.properties.name;
+        const color = choroplethMode === 'aqi'
+          ? (computeStateAQIColor(name, year)     || '#607090')
+          : (computeStateDensityColor(name, year) || '#555555');
+        matchArr.push(name, color);
+      });
+      matchArr.push('#555555'); // fallback for unmatched features
+
+      map.setPaintProperty('states-fill', 'fill-color',   matchArr);
+      map.setPaintProperty('states-fill', 'fill-opacity', 0.78);
+
+      updateCountyChoropleth(year);
+    }
+
+    function updateCountyChoropleth(year) {
+      if (!countiesGeoJSON || !map.getLayer('counties-fill')) return;
+
+      if (choroplethMode !== 'aqi') {
+        // Reset to hover-only style
+        map.setPaintProperty('counties-fill', 'fill-color', '#888888');
+        map.setPaintProperty('counties-fill', 'fill-opacity',
+          ['case', ['boolean', ['feature-state', 'hover'], false], 0.45, 0]);
+        return;
+      }
+      // Keep county polygons transparent while State AQI mode is active
+      // so state-level AQI color remains visible at all zoom levels.
+      map.setPaintProperty('counties-fill', 'fill-color', '#888888');
+      map.setPaintProperty('counties-fill', 'fill-opacity',
+        ['case', ['boolean', ['feature-state', 'hover'], false], 0.45, 0]);
+    }
+
+    // Pre-bake circle color into each feature so MapLibre can use ['get', 'color']
+    SITES_DATA.features.forEach(f => {
+      f.properties.color = aqiColor(f.properties.aqi);
+    });
+
+
+    // ======================================================
+    // MAP STUFF
+    // ======================================================
+
+    function satelliteStyle() {
+      return {
+        version: 8,
+        sources: {
+          satellite: {
+            type: 'raster',
+            tiles: [
+              'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+            ],
+            tileSize: 256,
+            attribution: 'Tiles &copy; Esri'
+          }
+        },
+        layers: [
+          {
+            id: 'satellite',
+            type: 'raster',
+            source: 'satellite'
+          },
+          {
+            id: 'satellite-dim',
+            type: 'background',
+            paint: {
+              'background-color': 'rgba(0, 0, 0, 0.58)'
+            }
+          }
+        ]
+      };
+    }
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: satelliteStyle(),
+      center: [-98.5, 39.5],
+      zoom: 3.8,
+      minZoom: 2.5,
+      maxZoom: 12,
+      maxBounds: [[-180, 10], [-50, 75]]
+    });
+
+    map.addControl(new maplibregl.NavigationControl(), 'bottom-left');
+    map.addControl(new maplibregl.ScaleControl(), 'bottom-right');
+
+    const tooltip   = document.getElementById('tooltip');
+    const loadingEl = document.getElementById('loading');
+    let countiesLoaded  = false;
+    let countiesLoading = false;
+    let hoveredStateId  = null;
+    let hoveredCountyId = null;
+    let compareMap      = null;
+    let compareReady    = false;
+    let compareYearIdx  = currentYearIdx;
+    let compareAirEnabled = true;
+    let comparePopulationEnabled = true;
+    let compareStatesGeoJSON = null;
+    let compareChoroplethMode = 'none'; // 'none' | 'aqi' | 'density'
+    let compareCountiesLoaded = false;
+    let compareCountiesLoading = false;
+    let syncingMaps      = false;
+    let statesGeoJSON    = null;
+    let countiesGeoJSON  = null;
+    let choroplethMode   = 'none'; // 'none' | 'aqi' | 'density'
+    let showWeatherOverlayMain = false;
+    let showWeatherOverlayCompare = false;
+    let weatherDrawFrameMain = null;
+    let weatherDrawFrameCompare = null;
+
+
+    // ======================================================
+    // LAYER — STATES 
+    // ======================================================
+
+    async function addStatesLayer() {
+      const geojson = await fetch(
+        'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json'
+      ).then(r => r.json());
+
+      statesGeoJSON = geojson;
+      map.addSource('states', { type: 'geojson', data: statesGeoJSON });
+
+      map.addLayer({
+        id: 'states-fill', type: 'fill', source: 'states',
+        paint: {
+          'fill-color':   ['case', ['boolean', ['feature-state', 'hover'], false], '#667788', '#303030'],
+          'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.7, 0.45]
+        }
+      });
+
+      map.addLayer({
+        id: 'states-border', type: 'line', source: 'states',
+        paint: {
+          'line-color':   '#888888',
+          'line-width':   ['case', ['boolean', ['feature-state', 'hover'], false], 4, 2.25],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.95, 5.5, 0.75, 6.2, 0]
+        }
+      });
+
+      map.addLayer({
+        id: 'states-label', type: 'symbol', source: 'states',
+        layout: {
+          'text-field':         ['get', 'name'],
+          'text-font':          ['Open Sans Bold', 'Arial Unicode MS Bold'],
+          'text-size':          ['interpolate', ['linear'], ['zoom'], 3, 8, 6, 13],
+          'text-anchor':        'center',
+          'text-allow-overlap': false
+        },
+        paint: {
+          'text-color':      '#c0c0c0',
+          'text-halo-color': '#0a0a0a',
+          'text-halo-width': 1.5
+        }
+      });
+    }
+
+
+    // ======================================================
+    // LAYER — COUNTIES
+    // ======================================================
+
+    async function loadCounties() {
+      if (countiesLoaded || countiesLoading) return;
+      countiesLoading = true;
+      loadingEl.style.display = 'block';
+
+      try {
+        const geojson = await fetch(
+          'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json'
+        ).then(r => r.json());
+
+        countiesGeoJSON = geojson;
+        map.addSource('counties', { type: 'geojson', data: countiesGeoJSON, generateId: true });
+
+        map.addLayer({
+          id: 'counties-fill', type: 'fill', source: 'counties',
+          paint: {
+            'fill-color':   '#888888',
+            'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.45, 0]
+          }
+        }, 'states-fill');
+
+        map.addLayer({
+          id: 'counties-border', type: 'line', source: 'counties',
+          paint: {
+            'line-color':   '#556677',
+            'line-width':   ['interpolate', ['linear'], ['zoom'], COUNTY_ZOOM, 0.9, 7, 1.6, 10, 2.4],
+            'line-opacity': ['interpolate', ['linear'], ['zoom'], COUNTY_ZOOM, 0.35, COUNTY_ZOOM + 0.5, 0.9]
+          }
+        }, 'states-border');
+
+        countiesLoaded = true;
+        updateCountyChoropleth(YEARS[currentYearIdx]);
+      } catch (err) {
+        console.error('County load failed:', err);
+        countiesLoading = false;
+      } finally {
+        loadingEl.style.display = 'none';
+      }
+    }
+
+
+    // ======================================================
+    // LAYER — COLLECTION SITES 2D
+    // ======================================================
+
+    function addSites2DLayer() {
+      map.addSource('sites', {
+        type: 'geojson',
+        data: yearToGeoJSON(YEARS[currentYearIdx]),
+        cluster: true,
+        clusterMaxZoom: 6,   // dissolves to individual dots at zoom 6+
+        clusterRadius: 28,   // tighter grouping = more readable clusters
+        clusterProperties: {
+          // sum of aqi values (nulls mapped to 0)
+          sumAqi: [['+', ['accumulated'], ['get', 'sumAqi']], ['coalesce', ['get', 'aqi'], 0]],
+          // count of sites that actually have an aqi value
+          cntAqi: [['+', ['accumulated'], ['get', 'cntAqi']],
+                   ['case', ['!=', ['coalesce', ['get', 'aqi'], -1], -1], 1, 0]]
+        }
+      });
+
+      // Cluster circles colored by average AQI of grouped sites
+      map.addLayer({
+        id: 'sites-cluster', type: 'circle', source: 'sites',
+        filter: ['has', 'point_count'],
+        paint: {
+          'circle-color': [
+            'case',
+            ['==', ['get', 'cntAqi'], 0], '#607090',  // all sites have no data
+            ['step',
+              ['/', ['get', 'sumAqi'], ['get', 'cntAqi']],
+              '#78FF78',   // 0-50  Good
+              50,  '#E3B500',  // Moderate
+              100, '#E07000',  // Unhealthy for Some
+              150, '#980000',  // Unhealthy
+              200, '#520029',  // Very Unhealthy
+              300, '#290000'   // Hazardous
+            ]
+          ],
+          'circle-radius':        ['step', ['get', 'point_count'], 14, 20, 18, 100, 24],
+          'circle-opacity':       0.88,
+          'circle-stroke-color':  'rgba(255,255,255,0.55)',
+          'circle-stroke-width':  1.5
+        }
+      });
+
+      // Cluster count labels
+      map.addLayer({
+        id: 'sites-cluster-count', type: 'symbol', source: 'sites',
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': '{point_count_abbreviated}',
+          'text-font':  ['Open Sans Bold', 'Arial Unicode MS Bold'],
+          'text-size':  12
+        },
+        paint: {
+          'text-color':       '#ffffff',
+          'text-halo-color':  'rgba(0,0,0,0.55)',
+          'text-halo-width':  1.5
+        }
+      });
+
+      // Individual points (not part of a cluster)
+      map.addLayer({
+        id: 'sites-unclustered', type: 'circle', source: 'sites',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+          'circle-color':          ['get', 'color'],
+          'circle-radius':         ['interpolate', ['linear'], ['zoom'], 3, 3, 8, 7],
+          'circle-opacity':        0.85,
+          'circle-stroke-color':   '#ffffff',
+          'circle-stroke-width':   0.5,
+          'circle-stroke-opacity': 0.4
+        }
+      });
+    }
+
+    function addPopulationLayer() {
+      map.addSource('population-cities', {
+        type: 'geojson',
+        data: populationToGeoJSON(YEARS[currentYearIdx])
+      });
+
+      map.addLayer({
+        id: 'population-heat',
+        type: 'heatmap',
+        source: 'population-cities',
+        maxzoom: 8,
+        paint: {
+          'heatmap-weight': [
+            'interpolate',
+            ['linear'],
+            ['get', 'population'],
+            0,
+            0,
+            300000,
+            0.08,
+            980000,
+            0.35,
+            2900000,
+            0.7,
+            9000000,
+            1
+          ],
+          'heatmap-intensity': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            0.55,
+            6,
+            1.9,
+            8,
+            2.8
+          ],
+          'heatmap-color': [
+            'interpolate',
+            ['linear'],
+            ['heatmap-density'],
+            0,
+            'rgba(102, 247, 255, 0)',
+            0.22,
+            'rgba(102, 247, 255, 0.50)',
+            0.45,
+            'rgba(30, 183, 255, 0.70)',
+            0.72,
+            'rgba(18, 102, 204, 0.84)',
+            1,
+            'rgba(6, 27, 91, 0.96)'
+          ],
+          'heatmap-radius': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            10,
+            5,
+            32,
+            8,
+            58
+          ],
+          'heatmap-opacity': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            2,
+            0.82,
+            7,
+            0.62,
+            8,
+            0.18
+          ]
+        }
+      }, 'sites-cluster');
+
+      map.addLayer({
+        id: 'population-point',
+        type: 'circle',
+        source: 'population-cities',
+        paint: {
+          'circle-color': '#f4f5ff',
+          'circle-radius': ['interpolate', ['sqrt'], ['get', 'population'], 300000, 3, 9000000, 12],
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.02, 6, 0.36, 8, 0.72],
+          'circle-stroke-color': '#080a12',
+          'circle-stroke-width': 0.8,
+          'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0, 6, 0.42]
+        }
+      }, 'sites-cluster');
+
+      map.addLayer({
+        id: 'population-label',
+        type: 'symbol',
+        source: 'population-cities',
+        minzoom: 5,
+        filter: ['>=', ['get', 'population'], 100000],
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 4, 9, 8, 12],
+          'text-offset': [0, 1.25],
+          'text-anchor': 'top',
+          'text-allow-overlap': false
+        },
+        paint: {
+          'text-color': '#f4f5ff',
+          'text-halo-color': '#080a12',
+          'text-halo-width': 1.4
+        }
+      });
+    }
+
+    async function addCompareStatesLayer(targetMap) {
+      const geojson = await fetch(
+        'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json'
+      ).then(r => r.json());
+      compareStatesGeoJSON = geojson;
+
+      targetMap.addSource('states', { type: 'geojson', data: geojson });
+      targetMap.addLayer({
+        id: 'states-fill',
+        type: 'fill',
+        source: 'states',
+        paint: {
+          'fill-color': '#303030',
+          'fill-opacity': 0.35
+        }
+      });
+      targetMap.addLayer({
+        id: 'states-border',
+        type: 'line',
+        source: 'states',
+        paint: {
+          'line-color': '#9fb0ff',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.4, 8, 1.4, 12, 1.0],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.98, 6.5, 0.78, 10, 0.56, 12, 0.46]
+        }
+      });
+      targetMap.addLayer({
+        id: 'states-label',
+        type: 'symbol',
+        source: 'states',
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 3, 8, 6, 13],
+          'text-anchor': 'center',
+          'text-allow-overlap': false
+        },
+        paint: {
+          'text-color': '#c0caff',
+          'text-halo-color': '#0a0a1e',
+          'text-halo-width': 1.5
+        }
+      });
+    }
+
+    async function loadCompareCounties() {
+      if (!compareMap || compareCountiesLoaded || compareCountiesLoading) return;
+      compareCountiesLoading = true;
+      try {
+        const geojson = await fetch(
+          'https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json'
+        ).then(r => r.json());
+
+        compareMap.addSource('counties', { type: 'geojson', data: geojson, generateId: true });
+
+        // Transparent fill so counties are clickable in the compare map.
+        compareMap.addLayer({
+          id: 'counties-fill',
+          type: 'fill',
+          source: 'counties',
+          paint: {
+            'fill-color': '#888888',
+            'fill-opacity': 0
+          }
+        }, 'states-fill');
+
+        // Minimal county styling (lines only). Keep them subtle under state borders.
+        compareMap.addLayer({
+          id: 'counties-border',
+          type: 'line',
+          source: 'counties',
+          paint: {
+            'line-color': '#5a6372',
+            'line-width': ['interpolate', ['linear'], ['zoom'], COUNTY_ZOOM, 0.8, 7, 1.2, 10, 1.8],
+            'line-opacity': ['interpolate', ['linear'], ['zoom'], COUNTY_ZOOM - 0.2, 0, COUNTY_ZOOM, 0.55, 8, 0.75, 12, 0.9]
+          }
+        }, 'states-border');
+
+        compareCountiesLoaded = true;
+      } catch (err) {
+        console.error('Compare county load failed:', err);
+      } finally {
+        compareCountiesLoading = false;
+      }
+    }
+
+    function updateCompareStateChoropleth(year) {
+      if (!compareReady || !compareMap || !compareMap.getLayer('states-fill') || !compareStatesGeoJSON) return;
+
+      if (compareChoroplethMode === 'none') {
+        compareMap.setPaintProperty('states-fill', 'fill-color', '#303030');
+        compareMap.setPaintProperty('states-fill', 'fill-opacity', 0.35);
+        return;
+      }
+
+      const matchArr = ['match', ['get', 'name']];
+      compareStatesGeoJSON.features.forEach(f => {
+        const name = f.properties.name;
+        const color =
+          compareChoroplethMode === 'aqi'
+            ? (computeStateAQIColor(name, year) || '#607090')
+            : (computeStateDensityColor(name, year) || '#555555');
+        matchArr.push(name, color);
+      });
+      matchArr.push(compareChoroplethMode === 'aqi' ? '#607090' : '#555555');
+
+      compareMap.setPaintProperty('states-fill', 'fill-color', matchArr);
+      compareMap.setPaintProperty('states-fill', 'fill-opacity', 0.78);
+    }
+
+    function addCompareDataLayers(targetMap, year) {
+      targetMap.addSource('population-cities', {
+        type: 'geojson',
+        data: populationToGeoJSON(year)
+      });
+      targetMap.addLayer({
+        id: 'population-heat',
+        type: 'heatmap',
+        source: 'population-cities',
+        maxzoom: 8,
+        paint: {
+          'heatmap-weight': ['interpolate', ['linear'], ['get', 'population'], 0, 0, 300000, 0.08, 980000, 0.35, 2900000, 0.7, 9000000, 1],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 2, 0.55, 6, 1.9, 8, 2.8],
+          'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(102, 247, 255, 0)', 0.22, 'rgba(102, 247, 255, 0.50)', 0.45, 'rgba(30, 183, 255, 0.70)', 0.72, 'rgba(18, 102, 204, 0.84)', 1, 'rgba(6, 27, 91, 0.96)'],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 2, 10, 5, 32, 8, 58],
+          'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.82, 7, 0.62, 8, 0.18]
+        }
+      }, 'states-label');
+
+      targetMap.addSource('sites', {
+        type: 'geojson',
+        data: yearToGeoJSON(year),
+        cluster: true,
+        clusterMaxZoom: 6,
+        clusterRadius: 28,
+        clusterProperties: {
+          sumAqi: [['+', ['accumulated'], ['get', 'sumAqi']], ['coalesce', ['get', 'aqi'], 0]],
+          cntAqi: [['+', ['accumulated'], ['get', 'cntAqi']],
+                   ['case', ['!=', ['coalesce', ['get', 'aqi'], -1], -1], 1, 0]]
+        }
+      });
+      targetMap.addLayer({
+        id: 'sites-cluster',
+        type: 'circle',
+        source: 'sites',
+        filter: ['has', 'point_count'],
+        paint: {
+          'circle-color': [
+            'case',
+            ['==', ['get', 'cntAqi'], 0], '#607090',
+            ['step',
+              ['/', ['get', 'sumAqi'], ['get', 'cntAqi']],
+              '#78FF78',
+              50, '#E3B500',
+              100, '#E07000',
+              150, '#980000',
+              200, '#520029',
+              300, '#290000'
+            ]
+          ],
+          'circle-radius': ['step', ['get', 'point_count'], 14, 20, 18, 100, 24],
+          'circle-opacity': 0.88,
+          'circle-stroke-color': 'rgba(255,255,255,0.55)',
+          'circle-stroke-width': 1.5
+        }
+      });
+
+      targetMap.addLayer({
+        id: 'sites-cluster-count',
+        type: 'symbol',
+        source: 'sites',
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': '{point_count_abbreviated}',
+          'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+          'text-size': 12
+        },
+        paint: {
+          'text-color': '#ffffff',
+          'text-halo-color': 'rgba(0,0,0,0.55)',
+          'text-halo-width': 1.5
+        }
+      });
+
+      targetMap.addLayer({
+        id: 'sites-unclustered',
+        type: 'circle',
+        source: 'sites',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+          'circle-color': ['get', 'color'],
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3, 8, 7],
+          'circle-opacity': 0.85,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 0.5,
+          'circle-stroke-opacity': 0.4
+        }
+      });
+
+      // Keep state borders above data layers so they remain visible in split view.
+      if (targetMap.getLayer('states-border')) targetMap.moveLayer('states-border');
+      if (targetMap.getLayer('states-label')) targetMap.moveLayer('states-label');
+
+      setCompareLayerVisibility();
+    }
+
+    function setCompareLayerVisibility() {
+      if (!compareReady || !compareMap) return;
+      const airVisible = compareAirEnabled;
+      const populationVisible = comparePopulationEnabled && hasPopulationYear(YEARS[compareYearIdx]);
+      ['sites-unclustered', 'sites-cluster', 'sites-cluster-count'].forEach(id => {
+        if (compareMap.getLayer(id)) compareMap.setLayoutProperty(id, 'visibility', airVisible ? 'visible' : 'none');
+      });
+      if (compareMap.getLayer('population-heat')) {
+        compareMap.setLayoutProperty('population-heat', 'visibility', populationVisible ? 'visible' : 'none');
+      }
+    }
+
+    function updateCompareYear(idx) {
+      compareYearIdx = Math.max(0, Math.min(YEARS.length - 1, idx));
+      const year = YEARS[compareYearIdx];
+      document.getElementById('compare-range').value = compareYearIdx;
+      document.getElementById('compare-display').textContent = year;
+      if (!compareReady || !compareMap) return;
+      if (compareMap.getSource('sites')) compareMap.getSource('sites').setData(yearToGeoJSON(year));
+      if (compareMap.getSource('population-cities')) compareMap.getSource('population-cities').setData(populationToGeoJSON(year));
+      setCompareLayerVisibility();
+      updateCompareStateChoropleth(year);
+      scheduleWeatherRedrawCompare();
+    }
+
+    function setupCompareInteractions() {
+      if (!compareMap) return;
+
+      compareMap.on('mousemove', 'sites-unclustered', () => {
+        compareMap.getCanvas().style.cursor = 'pointer';
+      });
+      compareMap.on('mouseleave', 'sites-unclustered', () => {
+        compareMap.getCanvas().style.cursor = '';
+      });
+
+      compareMap.on('click', 'sites-cluster', (e) => {
+        const feat = compareMap.queryRenderedFeatures(e.point, { layers: ['sites-cluster'] })[0];
+        if (!feat) return;
+        compareMap.getSource('sites').getClusterExpansionZoom(feat.properties.cluster_id, (err, zoom) => {
+          if (err) return;
+          compareMap.easeTo({ center: feat.geometry.coordinates, zoom: zoom + 0.5 });
+        });
+      });
+      compareMap.on('mouseenter', 'sites-cluster', () => { compareMap.getCanvas().style.cursor = 'pointer'; });
+      compareMap.on('mouseleave', 'sites-cluster', () => { compareMap.getCanvas().style.cursor = ''; });
+
+      // Site marker click popup (same content style as the main map).
+      compareMap.on('click', 'sites-unclustered', (e) => {
+        const p = e.features[0]?.properties;
+        if (!p) return;
+        const rows = [];
+        if (p.aqi   != null) rows.push(`AQI: <strong>${p.aqi}</strong>`);
+        if (p.pm25  != null) rows.push(`PM2.5: ${(+p.pm25).toFixed(1)} µg/m³`);
+        if (p.ozone != null) rows.push(`Ozone: ${(+p.ozone * 1000).toFixed(1)} ppb`);
+        if (p.no2   != null) rows.push(`NO₂: ${(+p.no2).toFixed(2)} ppb`);
+        if (p.so2   != null) rows.push(`SO₂: ${(+p.so2).toFixed(2)} ppb`);
+        if (p.co    != null) rows.push(`CO: ${(+p.co).toFixed(2)} ppm`);
+        if (p.pm10  != null) rows.push(`PM10: ${(+p.pm10).toFixed(1)} µg/m³`);
+        new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+          .setLngLat(e.lngLat)
+          .setHTML(`
+            <strong style="color:#aaaaaa">${p.name || 'Monitor'}</strong><br/>
+            <span style="color:#aaa">${p.state}${p.county ? ', ' + p.county : ''}</span>
+            ${rows.length ? '<br/>' + rows.join('<br/>') : ''}
+          `)
+          .addTo(compareMap);
+      });
+
+      // State/county summary popup for the compare map year.
+      compareMap.on('click', 'states-fill', (e) => {
+        if (compareMap.queryRenderedFeatures(e.point, { layers: ['sites-unclustered'] }).length) return;
+        if (compareCountiesLoaded && compareMap.getZoom() >= COUNTY_ZOOM) {
+          const countyHits = compareMap.queryRenderedFeatures(e.point, {
+            layers: ['counties-fill', 'counties-border']
+          });
+          if (countyHits.length) {
+            // County handler will show the popup; avoid double-popups.
+            return;
+          }
+        }
+
+        const name = e.features[0]?.properties?.name;
+        if (!name) return;
+        new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+          .setLngLat(e.lngLat)
+          .setHTML(buildStatePopupHTML(name, YEARS[compareYearIdx]))
+          .addTo(compareMap);
+      });
+
+      // County click popup (compare map)
+      compareMap.on('click', 'counties-fill', (e) => {
+        const county = e.features?.[0];
+        if (!county) return;
+        const countyName = county.properties?.NAME || '';
+        const stateFips = county.properties?.STATE || '';
+        const stateName = FIPS_TO_STATE[stateFips] || '';
+        if (!countyName || !stateName) return;
+        new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+          .setLngLat(e.lngLat)
+          .setHTML(buildCountyPopupHTML(countyName, stateName, YEARS[compareYearIdx]))
+          .addTo(compareMap);
+      });
+    }
+
+    function syncMapPair(source, target) {
+      if (syncingMaps || !target) return;
+      syncingMaps = true;
+      target.jumpTo({
+        center: source.getCenter(),
+        zoom: source.getZoom(),
+        bearing: source.getBearing(),
+        pitch: source.getPitch()
+      });
+      syncingMaps = false;
+    }
+
+    function initCompareMap() {
+      if (compareMap) return;
+      compareMap = new maplibregl.Map({
+        container: 'map-compare',
+        style: satelliteStyle(),
+        center: map.getCenter(),
+        zoom: map.getZoom(),
+        minZoom: 2.5,
+        maxZoom: 12,
+        maxBounds: [[-180, 10], [-50, 75]]
+      });
+      compareMap.addControl(new maplibregl.NavigationControl(), 'top-right');
+      compareMap.on('load', async () => {
+        await addCompareStatesLayer(compareMap);
+        addCompareDataLayers(compareMap, YEARS[compareYearIdx]);
+        setupCompareInteractions();
+        compareReady = true;
+        updateCompareYear(compareYearIdx);
+        updateCompareStateChoropleth(YEARS[compareYearIdx]);
+        compareMap.on('move', () => syncMapPair(compareMap, map));
+        compareMap.on('move', scheduleWeatherRedrawCompare);
+        compareMap.on('moveend', scheduleWeatherRedrawCompare);
+        compareMap.on('zoomend', scheduleWeatherRedrawCompare);
+
+        // Counties on compare map load lazily by zoom threshold
+        if (compareMap.getZoom() >= COUNTY_ZOOM) loadCompareCounties();
+        compareMap.on('zoom', () => { if (compareMap.getZoom() >= COUNTY_ZOOM) loadCompareCounties(); });
+      });
+      map.on('move', () => syncMapPair(map, compareMap));
+    }
+
+    function setSplitView(enabled) {
+      document.body.classList.toggle('split-view', enabled);
+      if (enabled) initCompareMap();
+      requestAnimationFrame(() => {
+        map.resize();
+        if (compareMap) compareMap.resize();
+        scheduleWeatherRedrawMain();
+        scheduleWeatherRedrawCompare();
+      });
+    }
+
+    function clearMapHoverState() {
+      if (hoveredStateId !== null && map.getSource('states')) {
+        map.setFeatureState({ source: 'states', id: hoveredStateId }, { hover: false });
+        hoveredStateId = null;
+      }
+      if (hoveredCountyId !== null && map.getSource('counties')) {
+        map.setFeatureState({ source: 'counties', id: hoveredCountyId }, { hover: false });
+        hoveredCountyId = null;
+      }
+      map.getCanvas().style.cursor = '';
+      tooltip.style.display = 'none';
+    }
+
+    function setPopulationVisibilityForYear(year) {
+      const popOn = document.getElementById('toggle-population').checked;
+      const showPopulation = hasPopulationYear(year) && popOn;
+      setLayerVisibility('population-heat', showPopulation);
+      setLayerVisibility('population-point', showPopulation);
+      setLayerVisibility('population-label', showPopulation);
+
+      const legendPop = document.getElementById('legend-population-section');
+      const yearNote = document.getElementById('year-note');
+      if (legendPop) legendPop.style.display = popOn ? '' : 'none';
+      if (yearNote) {
+        if (!popOn) yearNote.style.display = 'none';
+        else {
+          yearNote.style.display = '';
+          updatePopulationYearNote(year);
+        }
+      }
+    }
+
+
+    // ======================================================
+    // INTERACTIONS — HOVER & CLICK
+    // ======================================================
+
+    function setupInteractions() {
+      function clearStateHover() {
+        if (hoveredStateId !== null) {
+          map.setFeatureState({ source: 'states', id: hoveredStateId }, { hover: false });
+          hoveredStateId = null;
+        }
+      }
+
+      function clearCountyHover() {
+        if (hoveredCountyId !== null) {
+          map.setFeatureState({ source: 'counties', id: hoveredCountyId }, { hover: false });
+          hoveredCountyId = null;
+        }
+      }
+
+      // ----- State / County hover -----
+      map.on('mousemove', 'states-fill', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+
+        if (countiesLoaded && map.getZoom() >= COUNTY_ZOOM) {
+          clearStateHover();
+          const [county] = map.queryRenderedFeatures(e.point, { layers: ['counties-fill'] });
+          if (county) {
+            if (hoveredCountyId !== county.id) {
+              clearCountyHover();
+              hoveredCountyId = county.id;
+              map.setFeatureState({ source: 'counties', id: county.id }, { hover: true });
+            }
+            tooltip.style.display = 'block';
+            tooltip.style.left    = (e.point.x + 14) + 'px';
+            tooltip.style.top     = (e.point.y - 10) + 'px';
+            tooltip.textContent   = (county.properties.NAME || '') + ' County';
+          }
+        } else {
+          clearCountyHover();
+          const feat = e.features[0];
+          if (!feat) return;
+          if (hoveredStateId !== feat.id) {
+            clearStateHover();
+            hoveredStateId = feat.id;
+            map.setFeatureState({ source: 'states', id: feat.id }, { hover: true });
+          }
+          tooltip.style.display = 'block';
+          tooltip.style.left    = (e.point.x + 14) + 'px';
+          tooltip.style.top     = (e.point.y - 10) + 'px';
+          tooltip.textContent   = feat.properties.name;
+        }
+      });
+
+      map.on('mouseleave', 'states-fill', () => {
+        map.getCanvas().style.cursor = '';
+        clearStateHover();
+        clearCountyHover();
+        tooltip.style.display = 'none';
+      });
+
+      // ----- Cluster click: zoom in to expand -----
+      map.on('click', 'sites-cluster', (e) => {
+        const feat = map.queryRenderedFeatures(e.point, { layers: ['sites-cluster'] })[0];
+        if (!feat) return;
+        map.getSource('sites').getClusterExpansionZoom(feat.properties.cluster_id, (err, zoom) => {
+          if (err) return;
+          map.easeTo({ center: feat.geometry.coordinates, zoom: zoom + 0.5 });
+        });
+      });
+      map.on('mouseenter', 'sites-cluster', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'sites-cluster', () => { map.getCanvas().style.cursor = ''; });
+
+      // ----- Site marker hover -----
+      map.on('mousemove', 'sites-unclustered', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const f = e.features[0];
+        if (!f) return;
+        const p = f.properties;
+        tooltip.style.display = 'block';
+        tooltip.style.left    = (e.point.x + 14) + 'px';
+        tooltip.style.top     = (e.point.y - 10) + 'px';
+        const pollutants = [];
+        if (p.pm25  != null) pollutants.push(`PM2.5: ${(+p.pm25).toFixed(1)} µg/m³`);
+        if (p.ozone != null) pollutants.push(`Ozone: ${(+p.ozone * 1000).toFixed(1)} ppb`);
+        if (p.no2   != null) pollutants.push(`NO₂: ${(+p.no2).toFixed(2)} ppb`);
+        if (p.so2   != null) pollutants.push(`SO₂: ${(+p.so2).toFixed(2)} ppb`);
+        tooltip.innerHTML = `<strong>${p.name || 'Monitor'}</strong><br/><span style="color:#aaaaaa">${p.state}${p.county ? ', ' + p.county : ''}</span>${p.aqi != null ? `<br/>AQI: <strong>${p.aqi}</strong>` : ''}${pollutants.length ? '<br/>' + pollutants.join('<br/>') : ''}`;
+      });
+
+      map.on('mouseleave', 'sites-unclustered', () => {
+        map.getCanvas().style.cursor = '';
+        tooltip.style.display = 'none';
+      });
+
+      // ----- Population heatmap hover -----
+      map.on('mousemove', 'population-point', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const p = e.features[0]?.properties;
+        if (!p) return;
+        tooltip.style.display = 'block';
+        tooltip.style.left    = (e.point.x + 14) + 'px';
+        tooltip.style.top     = (e.point.y - 10) + 'px';
+        const changeText = p.change == null
+          ? ''
+          : `<br/><span style="color:#8fdfff">Change from ${Number(p.popYear) - 1}: ${Number(p.change).toLocaleString()} (${Number(p.changePct).toFixed(2)}%)</span>`;
+        tooltip.innerHTML = `<strong>${p.name}, ${p.state}</strong><br/><span style="color:#b8c0d8">Population ${p.popYear}: ${Number(p.population).toLocaleString()}</span>${changeText}`;
+      });
+
+      map.on('mouseleave', 'population-point', () => {
+        map.getCanvas().style.cursor = '';
+        tooltip.style.display = 'none';
+      });
+
+      // ----- Site marker click -----
+      map.on('click', 'sites-unclustered', (e) => {
+        const p = e.features[0]?.properties;
+        if (!p) return;
+        const rows = [];
+        if (p.aqi   != null) rows.push(`AQI: <strong>${p.aqi}</strong>`);
+        if (p.pm25  != null) rows.push(`PM2.5: ${(+p.pm25).toFixed(1)} µg/m³`);
+        if (p.ozone != null) rows.push(`Ozone: ${(+p.ozone * 1000).toFixed(1)} ppb`);
+        if (p.no2   != null) rows.push(`NO₂: ${(+p.no2).toFixed(2)} ppb`);
+        if (p.so2   != null) rows.push(`SO₂: ${(+p.so2).toFixed(2)} ppb`);
+        if (p.co    != null) rows.push(`CO: ${(+p.co).toFixed(2)} ppm`);
+        if (p.pm10  != null) rows.push(`PM10: ${(+p.pm10).toFixed(1)} µg/m³`);
+        new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+          .setLngLat(e.lngLat)
+          .setHTML(`
+            <strong style="color:#aaaaaa">${p.name || 'Monitor'}</strong><br/>
+            <span style="color:#aaa">${p.state}${p.county ? ', ' + p.county : ''}</span>
+            ${rows.length ? '<br/>' + rows.join('<br/>') : ''}
+          `)
+          .addTo(map);
+      });
+
+      map.on('click', 'population-point', (e) => {
+        const p = e.features[0]?.properties;
+        if (!p) return;
+        new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+          .setLngLat(e.lngLat)
+          .setHTML(`
+            <strong style="color:#d8d8d8">${p.name}, ${p.state}</strong><br/>
+            Population ${p.popYear}: <strong>${Number(p.population).toLocaleString()}</strong>
+            ${p.change == null ? '' : `<br/>Change from ${Number(p.popYear) - 1}: <strong>${Number(p.change).toLocaleString()}</strong> (${Number(p.changePct).toFixed(2)}%)`}
+          `)
+          .addTo(map);
+      });
+
+      // ----- State / County click -----
+      map.on('click', 'states-fill', (e) => {
+        // Let site clicks take priority
+        if (map.queryRenderedFeatures(e.point, { layers: ['sites-unclustered'] }).length) return;
+        if (map.queryRenderedFeatures(e.point, { layers: ['population-point'] }).length) return;
+
+        if (countiesLoaded && map.getZoom() >= COUNTY_ZOOM) {
+          const [county] = map.queryRenderedFeatures(e.point, { layers: ['counties-fill'] });
+          if (county) {
+            const stateName = e.features[0]?.properties?.name ?? '';
+            const countyName = county.properties.NAME || '';
+            new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+              .setLngLat(e.lngLat)
+              .setHTML(buildCountyPopupHTML(countyName, stateName, YEARS[currentYearIdx]))
+              .addTo(map);
+          }
+        } else {
+          const name = e.features[0]?.properties?.name;
+          if (!name) return;
+          new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+            .setLngLat(e.lngLat)
+            .setHTML(buildStatePopupHTML(name, YEARS[currentYearIdx]))
+            .addTo(map);
+        }
+      });
+    }
+
+
+    // ======================================================
+    // LAYER CONTROLS
+    // ======================================================
+
+    function setLayerVisibility(layerId, visible) {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
+      }
+    }
+
+    function initLayerControls() {
+      const airToggle      = document.getElementById('toggle-air');
+      const popToggle      = document.getElementById('toggle-population');
+      const windToggle     = document.getElementById('toggle-wind');
+      const weatherToggle  = document.getElementById('toggle-weather-overlay');
+      const aqiChoroToggle = document.getElementById('toggle-aqi-choropleth');
+      const densityToggle  = document.getElementById('toggle-density-choropleth');
+      const splitToggle    = document.getElementById('toggle-split');
+      const compareAirToggle = document.getElementById('toggle-compare-air');
+      const comparePopulationToggle = document.getElementById('toggle-compare-population');
+      const compareWindToggle = document.getElementById('toggle-compare-wind');
+      const compareWeatherToggle = document.getElementById('toggle-compare-weather-overlay');
+      const compareAqiChoroToggle = document.getElementById('toggle-compare-aqi-choropleth');
+      const compareDensityToggle = document.getElementById('toggle-compare-density-choropleth');
+
+      compareAirEnabled = airToggle.checked;
+      comparePopulationEnabled = popToggle.checked;
+      compareAirToggle.checked = compareAirEnabled;
+      comparePopulationToggle.checked = comparePopulationEnabled;
+      compareWindToggle.checked = windToggle.checked;
+      compareWeatherToggle.checked = false;
+      showWeatherOverlayCompare = false;
+      weatherCanvasCompare.style.display = 'none';
+      // Wind is a global full-screen canvas, so it can't be per-map.
+      compareWindToggle.disabled = true;
+      compareWindToggle.title = 'Shared layer (controls left map)';
+
+      // AQI overlay is now per-map (two canvases).
+      compareWeatherToggle.disabled = false;
+      compareWeatherToggle.title = 'Compare-map overlay only';
+      compareAqiChoroToggle.checked = false;
+      compareDensityToggle.checked = false;
+
+      airToggle.addEventListener('change', () => {
+        const v = airToggle.checked;
+        ['sites-unclustered', 'sites-cluster', 'sites-cluster-count'].forEach(id => setLayerVisibility(id, v));
+        if (!splitToggle.checked) {
+          compareAirEnabled = v;
+          compareAirToggle.checked = v;
+        }
+        setCompareLayerVisibility();
+      });
+
+      popToggle.addEventListener('change', () => {
+        setPopulationVisibilityForYear(YEARS[currentYearIdx]);
+        if (!splitToggle.checked) {
+          comparePopulationEnabled = popToggle.checked;
+          comparePopulationToggle.checked = popToggle.checked;
+        }
+        setCompareLayerVisibility();
+      });
+
+      // Main AQI overlay is independent from compare map overlay.
+
+      compareAirToggle.addEventListener('change', () => {
+        compareAirEnabled = compareAirToggle.checked;
+        setCompareLayerVisibility();
+      });
+
+      comparePopulationToggle.addEventListener('change', () => {
+        comparePopulationEnabled = comparePopulationToggle.checked;
+        setCompareLayerVisibility();
+      });
+
+      compareWeatherToggle.addEventListener('change', () => {
+        showWeatherOverlayCompare = compareWeatherToggle.checked;
+        weatherCanvasCompare.style.display =
+          showWeatherOverlayCompare && document.body.classList.contains('split-view') ? 'block' : 'none';
+        scheduleWeatherRedrawCompare();
+      });
+
+      compareAqiChoroToggle.addEventListener('change', () => {
+        if (compareAqiChoroToggle.checked) {
+          compareDensityToggle.checked = false;
+          compareChoroplethMode = 'aqi';
+        } else {
+          compareChoroplethMode = 'none';
+        }
+        updateCompareStateChoropleth(YEARS[compareYearIdx]);
+      });
+
+      compareDensityToggle.addEventListener('change', () => {
+        if (compareDensityToggle.checked) {
+          compareAqiChoroToggle.checked = false;
+          compareChoroplethMode = 'density';
+        } else {
+          compareChoroplethMode = 'none';
+        }
+        updateCompareStateChoropleth(YEARS[compareYearIdx]);
+      });
+
+      windToggle.addEventListener('change', () => {
+        if (compareWindToggle) compareWindToggle.checked = windToggle.checked;
+        document.getElementById('wind-canvas').style.display = windToggle.checked ? 'block' : 'none';
+      });
+
+      weatherToggle.addEventListener('change', () => {
+        showWeatherOverlayMain = weatherToggle.checked;
+        weatherCanvasMain.style.display = showWeatherOverlayMain ? 'block' : 'none';
+        if (showWeatherOverlayMain) scheduleWeatherRedrawMain();
+        else {
+          const rect = map.getContainer().getBoundingClientRect();
+          weatherCtxMain.clearRect(0, 0, rect.width, rect.height);
+        }
+      });
+
+      aqiChoroToggle.addEventListener('change', () => {
+        if (aqiChoroToggle.checked) {
+          densityToggle.checked = false;
+          choroplethMode = 'aqi';
+          document.getElementById('legend-density').style.display = 'none';
+        } else {
+          choroplethMode = 'none';
+        }
+        updateStateChoropleth(YEARS[currentYearIdx]);
+      });
+
+      densityToggle.addEventListener('change', () => {
+        if (densityToggle.checked) {
+          aqiChoroToggle.checked = false;
+          choroplethMode = 'density';
+          document.getElementById('legend-density').style.display = 'block';
+        } else {
+          choroplethMode = 'none';
+          document.getElementById('legend-density').style.display = 'none';
+        }
+        updateStateChoropleth(YEARS[currentYearIdx]);
+      });
+
+      splitToggle.addEventListener('change', () => setSplitView(splitToggle.checked));
+    }
+
+
+    // ======================================================
+    // AIR / WIND ANIMATION
+    // ======================================================
+
+    const windCanvas = document.getElementById('wind-canvas');
+    const windCtx = windCanvas.getContext('2d');
+    let windParticles = [];
+    let windYear = YEARS[currentYearIdx] || 2024;
+    let windFrame = null;
+
+    const weatherCanvasMain = document.getElementById('weather-canvas-main');
+    const weatherCtxMain = weatherCanvasMain.getContext('2d');
+    const weatherCanvasCompare = document.getElementById('weather-canvas-compare');
+    const weatherCtxCompare = weatherCanvasCompare.getContext('2d');
+
+    function resizeWindCanvas() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      windCanvas.width = Math.floor(window.innerWidth * dpr);
+      windCanvas.height = Math.floor(window.innerHeight * dpr);
+      windCanvas.style.width = window.innerWidth + 'px';
+      windCanvas.style.height = window.innerHeight + 'px';
+      windCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      seedWindParticles();
+    }
+
+    function seedWindParticles() {
+      const count = Math.round(Math.min(900, Math.max(280, window.innerWidth * window.innerHeight / 1800)));
+      windParticles = Array.from({ length: count }, () => ({
+        x: Math.random() * window.innerWidth,
+        y: Math.random() * window.innerHeight,
+        age: Math.random() * 120,
+        speed: 0.45 + Math.random() * 1.4
+      }));
+    }
+
+    function updateWindForYear(year) {
+      windYear = year;
+      windCanvas.style.opacity = String(0.42 + ((year % 5) * 0.055));
+    }
+
+    /** Map under this screen point (main or compare), or null. */
+    function mapForWindAt(clientX, clientY) {
+      const mainEl = map.getContainer();
+      const mr = mainEl.getBoundingClientRect();
+      if (clientX >= mr.left && clientX <= mr.right && clientY >= mr.top && clientY <= mr.bottom) {
+        return map;
+      }
+      if (compareMap && compareReady && document.body.classList.contains('split-view')) {
+        const cr = compareMap.getContainer().getBoundingClientRect();
+        if (clientX >= cr.left && clientX <= cr.right && clientY >= cr.top && clientY <= cr.bottom) {
+          return compareMap;
+        }
+      }
+      return null;
+    }
+
+    function clientPointToLngLat(targetMap, clientX, clientY) {
+      const r = targetMap.getContainer().getBoundingClientRect();
+      return targetMap.unproject([clientX - r.left, clientY - r.top]);
+    }
+
+    function pickWindPackForYear(W, year) {
+      if (!W) return null;
+      const sk = String(year);
+      const pack = W[sk];
+      return pack && pack.u && pack.v ? pack : null;
+    }
+
+    function sampleWindUVAt(pack, meta, lng, lat) {
+      const { cols, rows, latMin, latMax, lonMin, lonMax } = meta;
+      if (lng < lonMin || lng > lonMax || lat < latMin || lat > latMax) return null;
+      const fr = ((lat - latMin) / (latMax - latMin)) * (rows - 1);
+      const fc = ((lng - lonMin) / (lonMax - lonMin)) * (cols - 1);
+      const r0 = Math.max(0, Math.min(rows - 2, Math.floor(fr)));
+      const c0 = Math.max(0, Math.min(cols - 2, Math.floor(fc)));
+      const tr = fr - r0;
+      const tc = fc - c0;
+      const r1 = r0 + 1;
+      const c1 = c0 + 1;
+      const uA = pack.u;
+      const vA = pack.v;
+      const mix = (q00, q01, q10, q11) =>
+        q00 * (1 - tr) * (1 - tc) +
+        q01 * (1 - tr) * tc +
+        q10 * tr * (1 - tc) +
+        q11 * tr * tc;
+      const ui = (rr, cc) => uA[rr * cols + cc];
+      const vi = (rr, cc) => vA[rr * cols + cc];
+      return {
+        u: mix(ui(r0, c0), ui(r0, c1), ui(r1, c0), ui(r1, c1)),
+        v: mix(vi(r0, c0), vi(r0, c1), vi(r1, c0), vi(r1, c1))
+      };
+    }
+
+    /** East/north wind components (normalized) → screen pixel delta per animation unit. */
+    function windGeoToScreenDelta(targetMap, lng, lat, uEast, vNorth) {
+      const step = 0.035;
+      const p0 = targetMap.project([lng, lat]);
+      const pe = targetMap.project([lng + step, lat]);
+      const pn = targetMap.project([lng, lat + step]);
+      const dex = (pe.x - p0.x) / step;
+      const dey = (pe.y - p0.y) / step;
+      const dnx = (pn.x - p0.x) / step;
+      const dny = (pn.y - p0.y) / step;
+      return {
+        x: uEast * dex + vNorth * dnx,
+        y: uEast * dey + vNorth * dny
+      };
+    }
+
+    function windVectorSynthetic(x, y, time) {
+      const yearPhase = (windYear - 2000) * 0.19;
+      const nx = x / Math.max(window.innerWidth, 1);
+      const ny = y / Math.max(window.innerHeight, 1);
+      const angle =
+        Math.sin(nx * 7.5 + time * 0.00042 + yearPhase) * 1.2 +
+        Math.cos(ny * 6.5 - time * 0.00036 + yearPhase * 0.7) * 0.85 -
+        0.35;
+      const magnitude = 0.62 + Math.sin((nx + ny) * 5 + yearPhase) * 0.22;
+      return {
+        x: Math.cos(angle) * magnitude,
+        y: Math.sin(angle) * magnitude
+      };
+    }
+
+    /** Uses `data/wind.js` (NOAA ISD-derived grid) when loaded; otherwise synthetic flow. */
+    function windVector(x, y, time) {
+      const W = typeof WIND_DATA !== 'undefined' ? WIND_DATA : null;
+      if (W && W.meta) {
+        const tgt = mapForWindAt(x, y);
+        if (tgt) {
+          const ll = clientPointToLngLat(tgt, x, y);
+          const pack = pickWindPackForYear(W, windYear);
+          if (pack) {
+            const uv = sampleWindUVAt(pack, W.meta, ll.lng, ll.lat);
+            if (uv) {
+              const d = windGeoToScreenDelta(tgt, ll.lng, ll.lat, uv.u, uv.v);
+              const cur = Math.hypot(d.x, d.y);
+              if (cur > 1e-5) {
+                const base = Math.hypot(uv.u, uv.v);
+                const targetMag = Math.min(base * 0.52 + 0.34, 1.22);
+                const s = targetMag / cur;
+                return { x: d.x * s, y: d.y * s };
+              }
+            }
+          }
+        }
+      }
+      return windVectorSynthetic(x, y, time);
+    }
+
+    function drawWind(time) {
+      windCtx.fillStyle = 'rgba(8, 10, 18, 0.075)';
+      windCtx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+      windCtx.lineWidth = 1;
+      windCtx.strokeStyle = 'rgba(200, 210, 220, 0.34)';
+
+      for (const particle of windParticles) {
+        const v = windVector(particle.x, particle.y, time);
+        const prevX = particle.x;
+        const prevY = particle.y;
+        particle.x += v.x * particle.speed;
+        particle.y += v.y * particle.speed;
+        particle.age += 1;
+
+        windCtx.beginPath();
+        windCtx.moveTo(prevX, prevY);
+        windCtx.lineTo(particle.x, particle.y);
+        windCtx.stroke();
+
+        if (
+          particle.x < -20 || particle.x > window.innerWidth + 20 ||
+          particle.y < -20 || particle.y > window.innerHeight + 20 ||
+          particle.age > 160
+        ) {
+          particle.x = Math.random() * window.innerWidth;
+          particle.y = Math.random() * window.innerHeight;
+          particle.age = 0;
+          particle.speed = 0.45 + Math.random() * 1.4;
+        }
+      }
+
+      windFrame = requestAnimationFrame(drawWind);
+    }
+
+    function loadWindScript() {
+      return new Promise(resolve => {
+        try {
+          if (typeof WIND_DATA !== 'undefined' && WIND_DATA && WIND_DATA.meta) {
+            resolve(true);
+            return;
+          }
+        } catch (e) { /* ignore */ }
+        const s = document.createElement('script');
+        s.src = '../data/processed/wind.js';
+        s.onload = () => resolve(typeof WIND_DATA !== 'undefined' && !!WIND_DATA && !!WIND_DATA.meta);
+        s.onerror = () => resolve(false);
+        document.head.appendChild(s);
+      });
+    }
+
+    function initWindAnimation() {
+      resizeWindCanvas();
+      updateWindForYear(YEARS[currentYearIdx]);
+      window.addEventListener('resize', () => {
+        resizeWindCanvas();
+        scheduleWeatherRedrawMain();
+        scheduleWeatherRedrawCompare();
+      });
+      if (windFrame) cancelAnimationFrame(windFrame);
+      windFrame = requestAnimationFrame(drawWind);
+    }
+
+
+    // ======================================================
+    // AQI WEATHER OVERLAY  (localized radial interpolation)
+    // ======================================================
+
+    function aqiOverlayRadius(aqi, zoom) {
+      const base = Math.max(22, 112 - zoom * 14);
+      if (aqi <= 50) return base * 0.72;
+      if (aqi <= 100) return base * 0.9;
+      if (aqi <= 150) return base * 1.05;
+      return base * 1.18;
+    }
+
+    function aqiOverlayOpacity(aqi) {
+      if (aqi <= 50) return 0.18;
+      if (aqi <= 100) return 0.28;
+      if (aqi <= 150) return 0.38;
+      if (aqi <= 200) return 0.46;
+      return 0.52;
+    }
+
+    function resizeOverlayCanvas(canvas, ctx, container) {
+      const rect = container.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(1, Math.floor(rect.width * dpr));
+      const height = Math.max(1, Math.floor(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        canvas.style.width = rect.width + 'px';
+        canvas.style.height = rect.height + 'px';
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return rect;
+    }
+
+    function drawWeatherOverlayFor({ targetMap, year, canvas, ctx, container, enabled }) {
+      if (!enabled) return;
+      const rect = resizeOverlayCanvas(canvas, ctx, container);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      const sites  = HISTORICAL_DATA[year] || [];
+      const zoom   = targetMap.getZoom();
+
+      for (const site of sites) {
+        if (site.aqi == null) continue;
+        const px = targetMap.project([site.lon, site.lat]); // relative to container
+        const radius = aqiOverlayRadius(Number(site.aqi), zoom);
+        const cx = px.x;
+        const cy = px.y;
+        if (cx < -radius || cx > rect.width + radius ||
+            cy < -radius || cy > rect.height + radius) continue;
+
+        const [r, g, b] = hexToRgb(aqiColor(site.aqi));
+        const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+        const alpha = aqiOverlayOpacity(Number(site.aqi));
+        grad.addColorStop(0,    `rgba(${r},${g},${b},${alpha})`);
+        grad.addColorStop(0.55, `rgba(${r},${g},${b},${alpha * 0.42})`);
+        grad.addColorStop(1,    `rgba(${r},${g},${b},0)`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+      }
+    }
+
+    function drawWeatherOverlayMain() {
+      weatherDrawFrameMain = null;
+      drawWeatherOverlayFor({
+        targetMap: map,
+        year: YEARS[currentYearIdx],
+        canvas: weatherCanvasMain,
+        ctx: weatherCtxMain,
+        container: map.getContainer(),
+        enabled: showWeatherOverlayMain
+      });
+    }
+
+    function drawWeatherOverlayCompare() {
+      weatherDrawFrameCompare = null;
+      if (!compareMap) return;
+      drawWeatherOverlayFor({
+        targetMap: compareMap,
+        year: YEARS[compareYearIdx],
+        canvas: weatherCanvasCompare,
+        ctx: weatherCtxCompare,
+        container: compareMap.getContainer(),
+        enabled: showWeatherOverlayCompare && document.body.classList.contains('split-view')
+      });
+    }
+
+    function scheduleWeatherRedrawMain() {
+      if (weatherDrawFrameMain) return;
+      weatherDrawFrameMain = requestAnimationFrame(drawWeatherOverlayMain);
+    }
+
+    function scheduleWeatherRedrawCompare() {
+      if (weatherDrawFrameCompare) return;
+      weatherDrawFrameCompare = requestAnimationFrame(drawWeatherOverlayCompare);
+    }
+
+    // ======================================================
+    // YEAR SLIDER
+    // ======================================================
+
+    function setYear(idx) {
+      currentYearIdx = Math.max(0, Math.min(YEARS.length - 1, idx));
+      const year = YEARS[currentYearIdx];
+      clearMapHoverState();
+      document.querySelectorAll('.maplibregl-popup').forEach(popup => popup.remove());
+      document.getElementById('year-display').textContent = year;
+      document.getElementById('year-range').value = currentYearIdx;
+      if (map.getSource('sites')) {
+        map.getSource('sites').setData(yearToGeoJSON(year));
+      }
+      if (map.getSource('population-cities')) {
+        map.getSource('population-cities').setData(populationToGeoJSON(year));
+      }
+      setPopulationVisibilityForYear(year);
+      updateWindForYear(year);
+      updateStateChoropleth(year);
+      scheduleWeatherRedrawMain();
+    }
+
+    function initSlider() {
+      const range  = document.getElementById('year-range');
+      const prev   = document.getElementById('year-prev');
+      const next   = document.getElementById('year-next');
+      const compareRange = document.getElementById('compare-range');
+
+      range.max   = YEARS.length - 1;
+      range.value = currentYearIdx;
+      compareRange.max = YEARS.length - 1;
+      compareRange.value = compareYearIdx;
+      document.getElementById('year-display').textContent = YEARS[currentYearIdx];
+      document.getElementById('compare-display').textContent = YEARS[compareYearIdx];
+      setPopulationVisibilityForYear(YEARS[currentYearIdx]);
+
+      range.addEventListener('input', () => setYear(+range.value));
+      prev.addEventListener('click',  () => setYear(currentYearIdx - 1));
+      next.addEventListener('click',  () => setYear(currentYearIdx + 1));
+      compareRange.addEventListener('input', () => updateCompareYear(+compareRange.value));
+    }
+
+
+    // ======================================================
+    // BOOT  — wire everything up on map load
+    // ======================================================
+
+    map.on('load', async () => {
+      await addStatesLayer();
+      addSites2DLayer();
+      addPopulationLayer();
+
+      initSlider();
+      initLayerControls();
+      await loadWindScript();
+      initWindAnimation();
+
+      // County lines load lazily when user zooms in
+      if (map.getZoom() >= COUNTY_ZOOM) loadCounties();
+      map.on('zoom',     () => { if (map.getZoom() >= COUNTY_ZOOM) loadCounties(); });
+      map.on('dblclick', () => loadCounties());
+
+      // Redraw weather overlay as the map moves so the canvas stays registered.
+      map.on('move', scheduleWeatherRedrawMain);
+      map.on('moveend', scheduleWeatherRedrawMain);
+      map.on('zoomend', scheduleWeatherRedrawMain);
+
+      setupInteractions();
+    });
+  </script>
+</body>
+</html>
