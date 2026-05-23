@@ -78,17 +78,9 @@ MapStuff/
 │   ├── installation.md  
 │   └── user_guide.md  
 │  
-├── web/  
+└── web/  
     │  
-    ├── index.html (code that generates the website)  
-    │  
-    └── assets/  
-        │  
-        └── glyphs/  
-            ├── car.png (hand drawn glyph of a car)  
-            ├── ind.png (hand drawn glyph of a factory)  
-            ├── ag.png  (hand drawn glyph of a plant)  
-            └── atmos.png (hand drawn glyph of a sun)  
+    └── index.html (code that generates the website)  
 ```
 
 ## Running the Visualization  
