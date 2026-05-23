@@ -25,6 +25,7 @@ Nicolas Bartolomeo - nicolab2@umbc.edu (nicobartolomeo)
 This directory contains all the files necessary for creating and running the data visualization from scratch. 
 Below is a breakdown of the directory structure (and description of materials inside).
 
+```
 MapStuff/  
 │  
 ├── README.md (this file)  
@@ -77,7 +78,7 @@ MapStuff/
 │   ├── installation.md  
 │   └── user_guide.md  
 │  
-└── web/  
+├── web/  
     │  
     ├── index.html (code that generates the website)  
     │  
@@ -88,14 +89,15 @@ MapStuff/
             ├── ind.png (hand drawn glyph of a factory)  
             ├── ag.png  (hand drawn glyph of a plant)  
             └── atmos.png (hand drawn glyph of a sun)  
+```
 
 ## Running the Visualization  
-For more information about running the code, see the '../guides' folder 
+For more information about running the code, see the `../guides` folder 
   
 ### Licencing Information  
 This project is an independent academic visualization and is not affiliated with or endorsed by the EPA, NOAA, or the U.S. Census Bureau.  
   
-Processed datasets and visualizations are derived from publicly available government data sources, for more information about this, see 'data/data_sources.txt'  
+Processed datasets and visualizations are derived from publicly available government data sources, for more information about this, see `data/data_sources.txt`  
   
 This project also uses the following open-source libraries distibuted under respective open-source licenses:
 - MapLibre GL JS — https://maplibre.org/  
