@@ -58,3 +58,7 @@ datasets from United States government agencies.
 Disclaimer: This project is an independent academic and research visualization and is
 not affiliated with, endorsed by, or sponsored by the EPA, NOAA, the U.S.
 Census Bureau, Esri, or any associated government agency.
+
+------------------------------------------
+
+The software is available under the MIT License.
